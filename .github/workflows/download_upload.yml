@@ -1,0 +1,54 @@
+name: Telegram Movie Downloader & Uploader
+
+on:
+  workflow_dispatch:
+    inputs:
+      video_url:
+        description: 'URL of the video (m3u8 or mp4)'
+        required: true
+
+jobs:
+  download-and-upload:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout Repository
+      uses: actions/checkout@v3
+
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.10'
+
+    - name: Install Dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y ffmpeg
+        pip install -r requirements.txt
+
+    - name: Download and Process Video
+      run: |
+        echo "Downloading video from: ${{ github.event.inputs.video_url }}"
+        ffmpeg -i "${{ github.event.inputs.video_url }}" -c copy raw_video.mp4
+        
+        FILESIZE=$(stat -c%s "raw_video.mp4")
+        MAXSIZE=$((1900 * 1024 * 1024))
+        
+        if [ $FILESIZE -gt $MAXSIZE ]; then
+            echo "File is larger than 1.9GB. Compressing..."
+            DURATION=$(ffprobe -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 raw_video.mp4)
+            TARGET_BITRATE=$(awk "BEGIN {print int((1900 * 1024 * 1024 * 8) / $DURATION)}")
+            TARGET_BITRATE_K=$((TARGET_BITRATE / 1000))k
+            ffmpeg -y -i raw_video.mp4 -c:v libx264 -preset ultrafast -b:v $TARGET_BITRATE_K -maxrate $TARGET_BITRATE_K -bufsize $((TARGET_BITRATE/1000 * 2))k -c:a aac -b:a 128k final_video.mp4
+        else
+            mv raw_video.mp4 final_video.mp4
+        fi
+
+    - name: Upload to Telegram
+      env:
+        BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
+        API_ID: ${{ secrets.API_ID }}
+        API_HASH: ${{ secrets.API_HASH }}
+        CHAT_ID: ${{ secrets.CHAT_ID }}
+      run: |
+        python upload_to_telegram.py final_video.mp4
